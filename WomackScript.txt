@@ -1,0 +1,49 @@
+# Use QIIME to demultiplex the data, with -q 0. Store output as fastq format (we will quality filter with usearch)
+split_libraries_fastq.py -v -q 0 --store_demultiplexed_fastq -i 091113_MBO_AW686_NoIndex_L001_R1_001.fastq -b 091113_MBO_AW686_NoIndex_L001_R2_001_rc.fastq -o slout_q20/ -m MBO_mapping_file_cups.txt --barcode_type 10 -n 300
+
+# get quality stats
+usearch -fastq_stats seqs.fastq -log seqs.stats.log
+
+# remove low quality reads and trim
+usearch -fastq_filter seqs.fastq -fastq_trunclen 296 -fastq_maxee 0.5 -fastaout seqs.filtered.fasta
+
+# dereplicate seqs
+usearch -derep_fulllength seqs.filtered.fasta -output seqs.filtered.derep.fasta -sizeout
+
+# filter singletons
+usearch -sortbysize seqs.filtered.derep.fasta -minsize 2 -output seqs.filtered.derep.mc2.fasta
+
+# cluster OTUs
+usearch -cluster_otus seqs.filtered.derep.mc2.fasta -otus seqs.filtered.derep.mc2.repset.fasta
+
+# reference chimera check
+usearch -uchime_ref seqs.filtered.derep.mc2.repset.fasta -db gold.fa -strand plus -nonchimeras seqs.filtered.derep.mc2.repset.nochimeras.fasta
+
+# label OTUs using UPARSE python script
+python /home15/annw/drive5_py/fasta_number.py seqs.filtered.derep.mc2.repset.nochimeras.fasta OTU_ > seqs.filtered.derep.mc2.repset.nochimeras.OTUs.fasta
+
+# map the _original_ quality filtered reads back to OTUs
+usearch -usearch_global seqs.filtered.fasta -db seqs.filtered.derep.mc2.repset.nochimeras.OTUs.fasta -strand plus -id 0.97 -uc otu.map.uc
+
+# make OTU table. I modified the function 'GetSampleID' in the script 'uc2otutab.py' and renamed the script 'uc2otutab_mod.py':
+# The modified function is: function is:
+# def GetSampleId(Label): 
+#    SampleID = Label.split()[0].split('_')[0] 
+#    return SampleID 
+
+# I did this because my demultiplexed headers in the otu_map.uc looked like this:
+  ENDO.O.2.KLNG.20.1_19 MISEQ03:119:000000000-A3N4Y:1:2101:28299:16762 1:N:0:GGTATGACTCA orig_bc=GGTATGACTCA new_bc=GGTATGACTCA bc_diffs=0
+
+#make otu table and reformat sequence headers, all I need is the SampleID: "ENDO.O.2.KLNG.20.1", so I split on '_' 
+python /home15/annw/drive5_py/uc2otutab_mod.py otu.map.uc > seqs.filtered.derep.mc2.repset.nochimeras.OTU-table.txt
+
+# convert to biom
+biom convert --table-type="OTU table" -i seqs.filtered.derep.mc2.repset.nochimeras.OTU-table.txt -o seqs.filtered.derep.mc2.repset.nochimeras.OTU-table.biom
+
+# assign taxonomy 
+assign_taxonomy.py -t /home15/annw/gg_13_5_otus/taxonomy/97_otu_taxonomy.txt -r /home15/annw/gg_13_5_otus/rep_set/97_otus.fasta -i seqs.filtered.derep.mc2.repset.nochimeras.OTUs.fasta -o assigned_taxonomy
+
+# add taxonomy to table - did by hand in excel
+
+# convert to biom
+biom convert -i seqs.filtered.derep.mc2.repset.nochimeras.OTU-table_withtax.txt -o MBO_cups_uparse.biom --table-type="OTU table" --process-obs-metadata taxonomy
